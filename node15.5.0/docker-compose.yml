@@ -1,0 +1,21 @@
+version: "3.9"
+services:
+        web:
+                build:
+                        context: .
+                        dockerfile: Dockerfile.dev
+                ports:
+                        - "8080:8080"
+                volumes:
+                        - .:/app/code
+                depends_on:
+                        - mongo
+        mongo:
+                image: mongo
+                restart: always
+                ports:
+                        - 27018:27017
+                volumes:
+                        - mongo-data:/data/db
+volumes:
+        mongo-data:

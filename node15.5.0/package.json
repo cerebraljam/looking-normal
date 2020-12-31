@@ -1,0 +1,20 @@
+{
+	"name": "ratemykey_node",
+	"version": "0.0.1",
+	"description": "'rate my key' anomaly detection app in nodejs",
+	"author": "cerebraljam@gmail.com",
+	"main": "code/server.js",
+	"scripts": {
+		"start": "node server.js",
+		"start.dev": "nodemon"
+	},
+	"dependencies": {
+		"express": "^4.17.1",
+		"mongodb": "^3.6.3",
+		"mathjs": "^8.1.0"
+	},
+	"devDependencies": {
+		"nodemon": "^1.14.12"
+	}
+
+}
