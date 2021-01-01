@@ -35,7 +35,7 @@ def main(repeat, lines):
                         "action": action,
                         "date": date
                         }
-                r = requests.get('http://localhost:8080/ratemykey', params=params)
+                r = requests.get('http://localhost:5000/ratemykey', params=params)
                 print(r.text)
     
         if False:
@@ -51,7 +51,7 @@ def main(repeat, lines):
                         "action": action,
                         "date": date
                         }
-                r = requests.get('http://localhost:8080/ratemykey', params=params)
+                r = requests.get('http://localhost:5000/ratemykey', params=params)
                 print(r.text)
 
 repeat = 1

@@ -5,7 +5,7 @@ services:
                         context: .
                         dockerfile: Dockerfile.dev
                 ports:
-                        - "8080:8080"
+                        - "5000:5000"
                 volumes:
                         - .:/app/code
                 depends_on:
@@ -13,8 +13,6 @@ services:
         mongo:
                 image: mongo
                 restart: always
-                ports:
-                        - 27018:27017
                 volumes:
                         - mongo-data:/data/db
 volumes:
