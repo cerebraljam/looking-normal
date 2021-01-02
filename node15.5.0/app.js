@@ -10,7 +10,7 @@ const bodyParser = require('body-parser')
 
 // Constants
 
-const PORT = process.env.PORT || 8080
+const PORT = process.env.PORT || 5000
 const HOST = process.env.HOST || "0.0.0.0"
 const MONGOURL = "mongodb://mongo:27017/"
 const DBNAME = "ratemykey"
@@ -201,7 +201,7 @@ app.use(bodyParser.urlencoded({ extended: false }))
 app.use(bodyParser.json())
 
 app.get('/', (req, res) => {
-	res.send('Hello World')
+	res.send('Nothing to see here...')
 })
 
 app.get('/reset', function(req, res) {

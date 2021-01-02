@@ -156,13 +156,24 @@ def rate_key(score, key):
 
     # this is not necessary if we are OPA to analyze rating
     # but at the command line, when doing grep on "true" makes it easier to filter
-    result['outlier'] = "true" if score['sz'][idx] >= 3 and score['nz'][idx] >= 3 else "false"
+    result['outlier'] = "true" if score['sz'][idx] >= 3 and score['nz'][idx] >= 2 else "false"
 
     return result
 
 @app.route('/')
 def root():
-    return 'Hello World!\n'
+    return 'Nothing to see here...\n'
+
+@app.route('/reset')
+def reset():
+    context = request.args.get('context', default='trash', type=str)
+
+    if context != 'trash':
+        collection = mdb[context]
+        collection.delete_many({})
+        return 'Removed all documents from {}\n'.format(context)
+
+    return 'context parameter not defined...\n'
 
 
 # usage example curl https://host:5000/ratemykey?context=auth&key=1.2.3.4&action=login
@@ -192,5 +203,5 @@ def event():
     # Step 5: last step, we recover the value for the "key" submitted by the client
     rate = rate_key(score, key)
 
-    return json.dumps({"context": context, "key": key, "action": action, "runtime": time.time() - start, "result": rate})
+    return json.dumps({"context": context, "key": key, "action": action, "date": date.isoformat(), "runtime": time.time() - start, "result": rate})
 
