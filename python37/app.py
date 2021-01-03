@@ -2,6 +2,7 @@ import time
 import datetime
 import numpy as np
 import json
+import os
 
 from flask import Flask, request
 
@@ -14,17 +15,21 @@ mdb = mclient['ratemykey']
 app = Flask(__name__)
 
 # keep track of created indexes
-indexes = []
+did_check_indexes = False
+
+SZLIMIT = int(os.getenv("SZLIMIT", default="3"))
+NZLIMIT = int(os.getenv("NZLIMIT", default="2"))
 
 def insert(context, key, action, now):
     collection = mdb[context]
 
     # check if the index for the "key" field exists already
-    if "key" not in indexes:
+    if not did_check_indexes:
         if "key" not in collection.index_information():
             collection.create_index("key")
-        # we did check, therefore we don't want to check again to see if the index exists
-        indexes.append("key")
+        if "date" not in collection.index_information():
+            collection.create_index("date")
+        did_check_indexes = True
 
     r = collection.find_one({"key": key})
 
@@ -33,7 +38,7 @@ def insert(context, key, action, now):
         # if we did find one entry for the "key" already, then we update it
         id = collection.update_one(
                 { "_id": r["_id"] }, # query filter
-                { "$push" : { "actions": action }, "$set": { "date": now } } # replacement document
+                { "$push" : { "actions": { "$each": [action], "$slice": -1000 } }, "$set": { "date": now } } # replacement document
                 )
     else:
         # create a new one
@@ -79,12 +84,6 @@ def score_keys(context, acs, now):
     collection = mdb[context]
 
     time_limit = now - datetime.timedelta(days=1)
-
-    if "date" not in indexes:
-        if "date" not in collection.index_information():
-            collection.create_index("date")
-        # we did check, therefore we don't want to check again to see if the index exists
-        indexes.append("date")
 
     # cleanup: delete old data from the database
     d = collection.delete_many({"date": {"$lt": time_limit}})
@@ -156,7 +155,7 @@ def rate_key(score, key):
 
     # this is not necessary if we are OPA to analyze rating
     # but at the command line, when doing grep on "true" makes it easier to filter
-    result['outlier'] = "true" if score['sz'][idx] >= 3 and score['nz'][idx] >= 2 else "false"
+    result['outlier'] = "true" if score['sz'][idx] >= SZLIMIT and score['nz'][idx] >= NZLIMIT else "false"
 
     return result
 
