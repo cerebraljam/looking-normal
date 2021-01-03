@@ -14,18 +14,46 @@ const PORT = process.env.PORT || 5000
 const HOST = process.env.HOST || "0.0.0.0"
 const MONGOURL = "mongodb://mongo:27017/"
 const DBNAME = "ratemykey"
+const SZLIMIT = Number(process.env.SZLIMIT) || 3
+const NZLIMIT = Number(process.env.NZLIMIT) || 3
 
 var db = false
+var didCheckIndexes = false
 
+// Design decision: Why did I use Mongodb and not sql?
+// A. both would have work. I used to use Bigquery to do the same thing. Mongodb
+//    allowed me to keep a document per key, which seemed more memory efficient
+//    if we had to handle with a lot of actors, and seemed to be easier to port
+//    in a full memory based database (ex.: redis) if mongodb can't handle the load
+
+// Initialization of the connection to the database
 MongoClient.connect(MONGOURL, function(err, client) {
 	assert.equal(null, err)
 	//console.log("Connected successfully to database")
-
 	db = client.db(DBNAME)
 })
 
-const insert = function(db, key, action, now, next) {
-	db.insertOne({"key": key, "actions": [], "date": now}, function(err, result) {
+// Design decision: why am I using an array of actions instead of counting 
+// listing only unique actions and keeping a counter in parallel?
+// A. Some sessions can go forever. Actions taken few days ago can be
+//    irrelevant to calculate how current actions are important. Keeping an 
+//    array of all actions and cuting after 1000 allows the app to forget
+//    past actions, which is not possible to flush counts from a previous day,
+//    unless we keep distint counters per day.
+
+// Function: insert
+// Called by: update 
+// Used for: if the update function did not find the key specified, `insert` will create a
+//           new entry in the database
+// receives:
+//    collection: a collection object previously initialized
+//    key: unique actor identifier (ex.: ip, host, username)
+//    action: a string representing any discrete action being done (ex.: /login, /login:failure)
+//    now: date and time of the event, provided by the client or current system date time
+//    next: callback function
+// Return: Nothing. Result transmitted through callback
+const insert = function(collection, key, action, now, next) {
+	collection.insertOne({"key": key, "actions": [], "date": now}, function(err, result) {
 		assert.equal(err, null)
 		assert.equal(1, result.result.n)
 		assert.equal(1, result.ops.length)
@@ -35,11 +63,21 @@ const insert = function(db, key, action, now, next) {
 	})
 }
 
-const update = function(db, key, action, now, next) {
-	db.updateOne({"key": key}, { $push: { "actions": action } }, function(err, result) {
+// Function: update
+// Called by: /ratemykey web endpoint as step 1
+// Used For: add new actions to the document related to "key"
+// Receives:
+//    collection: a collection object previously initialized
+//    key: unique actor identifier (ex.: ip, host, username)
+//    action: a string representing any discrete action being done (ex.: /login, /login:failure)
+//    now: date and time of the event, provided by the client or current system date time
+//    next: callback function
+// Return: Nothing. Result transmitted through callback
+const update = function(collection, key, action, now, next) {
+	collection.updateOne({"key": key}, { $push: { "actions": { $each: [action], $slice: -1000 } }}, function(err, result) {
 		assert.equal(err, null)
 		if (result.result.n == 0) {
-			insert(db, key, action, now, next)
+			insert(collection, key, action, now, next)
 		} else {
 			//console.log("step 1: Updated one document")
 			next(result.result.n)
@@ -47,8 +85,15 @@ const update = function(db, key, action, now, next) {
 	})
 }
 
-const aggregateActions = function(db, next) {
-	db.aggregate([
+// Function: aggregateActions
+// Called by: /ratemykey web endpoint as step 2
+// Used For: count the frequency of each actions in every "key" documents
+// Receives:
+//    collection: a collection object previously initialized
+//    next: callback function
+// Return: Nothing. Result transmitted through callback
+const aggregateActions = function(collection, next) {
+	collection.aggregate([
     	{ "$unwind": "$actions" },
         {
             "$group": {
@@ -60,13 +105,20 @@ const aggregateActions = function(db, next) {
 			assert.equal(err, null)
 			cursor.toArray(function(err, documents) {
 				//console.log("step 2: aggregation")
-				//console.log(documents)
 				next(documents)
 			})
 		})
 }
 
-const addSurprisal = async function(db, data) {
+// Function: addSurprisal
+// Called by: /ratemykey web endpoint as step 3
+// Used For: calculate and return a lookup table that will be used to
+//           give an information value (in bits) to each actions given their likelihood
+// Receives:
+//   data: frequency of each actions calculated by the aggregateAtions function
+// Return:
+//   a lookup table containing the count and surprisal value for each action
+const addSurprisal = async function(data) {
 	//console.log("step 3: add_surprisal")
 	let total = 0
 	let actionScore = {}
@@ -90,14 +142,23 @@ const addSurprisal = async function(db, data) {
 	return actionScore
 }
 
-const scoreKeys = async function(db, actionScore, date, next) {
+// Function: scoreKeys
+// Called by: /ratemykey web endpoint as step 4
+// Used For: Goes through each "key" in the database, lookup the information value
+//           of each action done by the user, sum up the amount of information
+//           Will calculate the surprisal, normalized count, sz, nz values for each key
+// Receives:
+//    collection: a collection object previously initialized
+//    actionScore: lookup table created by the addSurprisal function
+//    date: date and time of the event, provided by the client or current system date time
+//    next: callback function
+// Return: Nothing. Result transmitted through callback
+const scoreKeys = async function(collection, actionScore, date, next) {
 	//console.log("step 4: score keys")
 
     let timeLimit = new Date(date.getTime() - 86400000)
 
-	//console.log("actionScore: " + inspect(actionScore))
-
-	db.find({"date": {"$gt": timeLimit}}).toArray(function(err, docs) {
+	collection.find({"date": {"$gt": timeLimit}}).toArray(function(err, docs) {
 		assert.equal(err, null)
 
 		let score = {
@@ -111,8 +172,6 @@ const scoreKeys = async function(db, actionScore, date, next) {
 		}
 
 		for (let row in docs) {
-			//console.log('row: ' + docs[row])
-			
 			let key = docs[row]['key']
 			let surp = docs[row]['actions'].reduce(function(accumulator, currentValue) {
 				return accumulator + actionScore[currentValue]['surprisal']
@@ -126,20 +185,13 @@ const scoreKeys = async function(db, actionScore, date, next) {
 			score['normalizeds'].push(surp/docs[row]['actions'].length || 0)
 		}
 
-		//let n = score['surprisals'].length
-		//let sSum = score['surprisals'].reduce((accumulator, current) => accumulator + current, 0)
 		let sAverage = math.mean(score['surprisals']) || 0
 		let sStd = math.std(score['surprisals'], 'uncorrected')
 
-		//console.log('* N:', score['normalizeds'])
-		//let nSum = score['normalizeds'].reduce((accumulator, current) => accumulator + current, 1)
-		//let nAverage = nSum / n || 0
 		let nAverage = math.mean(score['normalizeds']) || 0
 		let nStd = math.std(score['normalizeds'], 'uncorrected')
-		//console.log('* n', nSum, nAverage, nStd, n)
 
 		// calculate the surprisal zscore and normalized zscore for each "key"
-
 		for (let i = 0; i < score['keys'].length; i++) {
 			score['sz'][i] = (score["surprisals"][i] - sAverage) / sStd || 0
 			score['nz'][i] = (score["normalizeds"][i] - nAverage) / nStd || 0
@@ -148,12 +200,23 @@ const scoreKeys = async function(db, actionScore, date, next) {
 		next(score)
 	})
 
-
-	db.deleteMany({"date": {"$lt": timeLimit}}, function(err, result) {
+    // after everything is completed and the answer is returned to the client
+    // we cleanup old entries in the database
+	collection.deleteMany({"date": {"$lt": timeLimit}}, function(err, result) {
 		assert.equal(err, null)
 	})
 }
 
+// Function: rateKey
+// Called by: /ratemykey web endpoint as step 5
+// Used for: Will extract the data from score memory object (created by scoreKeys)
+//           and pivot the result to return an object
+//           Will set the outlier to true or false depending of the SZLIMIT and NZLIMIT
+//           cnfigured in the Dockerfile
+// Receive:
+//   score: list of all the scores for all the keys produced by the scoreKeys function
+//   key: actor that we care about.
+// Return: object containing all the relevant results for actor "key"
 const rateKey = async function(score, key) {
 	//console.log("step 5: rate_key")
 
@@ -165,16 +228,24 @@ const rateKey = async function(score, key) {
 		result[x] = score[x][idx]
 	}
 
-	if (result['sz'] >= 3 && result['nz'] >= 3) {
+	if (result['sz'] >= SZLIMIT && result['nz'] >= NZLIMIT) {
 		result['outlier'] = true
 	} else {
 		result['outlier'] = false
 	}
-	//console.log('rateKey pivot:' + inspect(result))
 
 	return result
 }
 
+
+// Function: flushContext
+// Called by: /reset web endpoint
+// Used for: flush all information for a certain context. useful during testing, should not
+//           be useful in production.
+//           Note: should not be left accessible on the internet
+// Receive:
+//   context: "context" value for which we want to flush all the documents
+// Return: Nothing. Success/Failure transmitted to the caller through the callback
 const flushContext = async function(context, next) {
 	const collection = db.collection(context)
 	
@@ -188,6 +259,11 @@ const flushContext = async function(context, next) {
 	})
 }
 
+// Function: indexcollection
+// Called by: /ratebykey web endpoint at it's beginning
+// Used for: when the application is started, we don't know if the collection already exists
+//           in the database. However, it is only called if didCheckIndexes is false, normally
+//           at the first call of the /ratemykey endpoint
 const indexCollection = async function(collection, key) {
 	//console.log("checking index for " + key)
 	await collection.createIndex({key: 1}, null, function(err, results) {
@@ -200,10 +276,12 @@ const app = express()
 app.use(bodyParser.urlencoded({ extended: false }))
 app.use(bodyParser.json())
 
+// Default endpoint, returns nothing interesting
 app.get('/', (req, res) => {
 	res.send('Nothing to see here...')
 })
 
+// Used to reset all data for a specified context
 app.get('/reset', function(req, res) {
 	const context = req.query.context || "trash"
 	if (db != false && context != "trash") {
@@ -220,6 +298,7 @@ app.get('/reset', function(req, res) {
 	}
 })
 
+// Main endpoint for this app. coordinate everything
 app.get('/ratemykey', async function(req, res) {
 	const startDate = new Date()
 
@@ -233,18 +312,21 @@ app.get('/ratemykey', async function(req, res) {
 
 		const collection = db.collection(context)
 
+		if (!didCheckIndexes) {
+			didCheckIndexes = true
+			await indexCollection(collection, "key")
+			await indexCollection(collection, "date")
+		}
+
 		// step 1
-		await indexCollection(collection, "key")
 		update(collection, key, action, new Date(date), function(n) {
 			if (n) {
 				// step 2
 				aggregateActions(collection, async function(aggregated) {
 					// step 3
-					let actionScore = await addSurprisal(collection, aggregated)
+					let actionScore = await addSurprisal(aggregated)
 
 					// step 4
-					await indexCollection(collection, "date")
-
 					scoreKeys(collection, actionScore, new Date(date), async function(score) {
 						// step 5
 						let rate = await rateKey(score, key)
