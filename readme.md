@@ -50,11 +50,11 @@ The service will return something like this
 	* `normalizeds`: surprisal / count. Since this is calculated for each key, we can use this value to see if the normalized surprisal is still significantly greater than others
 	* `sz`: z score for key against others. this represents how many standard deviations a key is under or over the average. sz >= 1 means that the value is greater than 84.1% of the others. sz >= 2 means greater than 97.7% of all keys. sz >= 3 means greater than 99.8% of all keys. So a sz >=3 is in the 0.2% of all keys. This is unlikely.
 	* `nz`: z score for normalized surprisals. Same concept as sz, but for normalized actions.
-	* `outlier`: if `sz` and `nz` are 3 or greater, we can be quite confident that what the key is doing is unlikely. This 3 is hardcoded in the code, but it can be adjusted as needed.
+	* `outlier`: if `sz` and `nz` are 3 or greater, we can be quite confident that what the key is doing is unlikely. the sz and nz limits are defined in the Dockerfile.
 
 # How I use these results
 
-I am using Open Policy Agent to take decision on events. The OPA rule is used to filter out known noise, and will trigger an alert on anything else with sz>=3 and nz>=2. If OPA is not an option and filtering on sz and nz is not convenient, then modifying code to set `outlier` to true at a different value is also an option.
+I am using Open Policy Agent to take decision on events. The OPA rule is used to filter out known noise, and will trigger an alert on anything else with sz>=3 and nz>=2. If OPA is not an option and filtering on sz and nz is not convenient, SZLIMIT and NZLIMIT can be modified in the Dockerfile to change over each limit `outlier` will be set to true. I noticed during testing that administrators and service accounts tend to trigger alerts more than users. Instead of increasing the sz and nz limits too high, it might worth filtering known good actions in OPA or through your filter of choice.
 
 # Sample script
 
