@@ -117,9 +117,9 @@ const aggregateActions = function(collection, next) {
 // Receives:
 //   data: frequency of each actions calculated by the aggregateAtions function
 // Return:
-//   a lookup table containing the count and surprisal value for each action
+//   a lookup table containing the count and cross entropy value for each action
 const addSurprisal = async function(data) {
-	//console.log("step 3: add_surprisal")
+	//console.log("step 3: addXEntropy")
 	let total = 0
 	let actionScore = {}
 
@@ -135,7 +135,7 @@ const addSurprisal = async function(data) {
 
 		actionScore[action] = {
 			'count': data[d]['count'],
-			'surprisal': Math.log2(1/(n/total))
+			'xentropy': Math.log2(1/(n/total))
 		}
 	}
 	
@@ -146,7 +146,7 @@ const addSurprisal = async function(data) {
 // Called by: /ratemykey web endpoint as step 4
 // Used For: Goes through each "key" in the database, lookup the information value
 //           of each action done by the user, sum up the amount of information
-//           Will calculate the surprisal, normalized count, sz, nz values for each key
+//           Will calculate the cross entropy, normalized count, xz, nz values for each key
 // Receives:
 //    collection: a collection object previously initialized
 //    actionScore: lookup table created by the addSurprisal function
@@ -163,10 +163,10 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 
 		let score = {
 			"keys": [], 
-			"surprisals": [], 
+			"xentropy": [], 
 			"normalizeds": [], 
 			"counts": [], 
-			"sz": [], 
+			"xz": [], 
 			"nz": [], 
 			"outlier": false
 		}
@@ -174,26 +174,26 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 		for (let row in docs) {
 			let key = docs[row]['key']
 			let surp = docs[row]['actions'].reduce(function(accumulator, currentValue) {
-				return accumulator + actionScore[currentValue]['surprisal']
+				return accumulator + actionScore[currentValue]['xentropy']
 			},0)
 			
 			score['keys'].push(key)
-			score['surprisals'].push(surp)
-			score['sz'].push(0)
+			score['xentropy'].push(surp)
+			score['xz'].push(0)
 			score['nz'].push(0)
 			score['counts'].push(docs[row]['actions'].length || 0)
 			score['normalizeds'].push(surp/docs[row]['actions'].length || 0)
 		}
 
-		let sAverage = math.mean(score['surprisals']) || 0
-		let sStd = math.std(score['surprisals'], 'uncorrected')
+		let sAverage = math.mean(score['xentropy']) || 0
+		let sStd = math.std(score['xentropy'], 'uncorrected')
 
 		let nAverage = math.mean(score['normalizeds']) || 0
 		let nStd = math.std(score['normalizeds'], 'uncorrected')
 
-		// calculate the surprisal zscore and normalized zscore for each "key"
+		// calculate the cross entropy zscore and normalized zscore for each "key"
 		for (let i = 0; i < score['keys'].length; i++) {
-			score['sz'][i] = (score["surprisals"][i] - sAverage) / sStd || 0
+			score['xz'][i] = (score["xentropy"][i] - sAverage) / sStd || 0
 			score['nz'][i] = (score["normalizeds"][i] - nAverage) / nStd || 0
 		}
 		
@@ -228,7 +228,7 @@ const rateKey = async function(score, key) {
 		result[x] = score[x][idx]
 	}
 
-	if (result['sz'] >= SZLIMIT && result['nz'] >= NZLIMIT) {
+	if (result['xz'] >= SZLIMIT && result['nz'] >= NZLIMIT) {
 		result['outlier'] = true
 	} else {
 		result['outlier'] = false

@@ -14,7 +14,7 @@ def main(repeat):
                 "key": "user{}".format(random.randint(10,1000)),
                 "action": random.choice(actions)
                 }
-        r = requests.get('http://localhost:8080/ratemykey', params=params)
+        r = requests.get('http://localhost:5000/ratemykey', params=params)
         print(r.text)
 
 
