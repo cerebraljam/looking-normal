@@ -162,10 +162,10 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 		assert.equal(err, null)
 
 		let score = {
-			"keys": [], 
+			"key": [], 
 			"xentropy": [], 
-			"normalizeds": [], 
-			"counts": [], 
+			"normalized": [], 
+			"count": [], 
 			"xz": [], 
 			"nz": [], 
 			"outlier": false
@@ -177,24 +177,24 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 				return accumulator + actionScore[currentValue]['xentropy']
 			},0)
 			
-			score['keys'].push(key)
+			score['key'].push(key)
 			score['xentropy'].push(surp)
 			score['xz'].push(0)
 			score['nz'].push(0)
-			score['counts'].push(docs[row]['actions'].length || 0)
-			score['normalizeds'].push(surp/docs[row]['actions'].length || 0)
+			score['count'].push(docs[row]['actions'].length || 0)
+			score['normalized'].push(surp/docs[row]['actions'].length || 0)
 		}
 
 		let sAverage = math.mean(score['xentropy']) || 0
 		let sStd = math.std(score['xentropy'], 'uncorrected')
 
-		let nAverage = math.mean(score['normalizeds']) || 0
-		let nStd = math.std(score['normalizeds'], 'uncorrected')
+		let nAverage = math.mean(score['normalized']) || 0
+		let nStd = math.std(score['normalized'], 'uncorrected')
 
 		// calculate the cross entropy zscore and normalized zscore for each "key"
-		for (let i = 0; i < score['keys'].length; i++) {
+		for (let i = 0; i < score['key'].length; i++) {
 			score['xz'][i] = (score["xentropy"][i] - sAverage) / sStd || 0
-			score['nz'][i] = (score["normalizeds"][i] - nAverage) / nStd || 0
+			score['nz'][i] = (score["normalized"][i] - nAverage) / nStd || 0
 		}
 		
 		next(score)
@@ -220,7 +220,7 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 const rateKey = async function(score, key) {
 	//console.log("step 5: rate_key")
 
-	let idx = score['keys'].indexOf(key)
+	let idx = score['key'].indexOf(key)
 
 	let result = {}
 

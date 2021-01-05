@@ -93,34 +93,34 @@ def score_keys(context, acs, now):
     r = collection.find({})
 
     # template the return value
-    score = { "keys": [], "xentropy": [], "counts": [], "xz": [], "normalizeds": [], "nz": [] }
+    score = { "key": [], "xentropy": [], "count": [], "xz": [], "normalized": [], "nz": [] }
 
     # for each key, we calculate the different values
     for row in r:
         key = row['key'] 
         surp = sum([acs[a]['xentropy'] for a in row['actions']]) # sum of the cross entropy value for each action
-        score['keys'].append(key)
+        score['key'].append(key)
         score['xentropy'].append(surp) # cross entropy value calculated for the current "key"
         score['xz'].append(0) # cross entropy zscore will be calculated later. setting value to 0 for now
         score['nz'].append(0) # normalized zscore will be calculated later. setting value to 0 for now
-        score['counts'].append(len(row['actions'])) # number of actions for that key
+        score['count'].append(len(row['actions'])) # number of actions for that key
 
         # this is an attempt to handle long running sessions that will trigger an alert
         # over time because of all the actions done. the cross entropy value of 500 actions
         # is likely to be higher than someone with 10 actions, but if we normalize by 
         # the number of actions then we can see the average value of each action
-        score['normalizeds'].append(surp/len(row['actions']))
+        score['normalized'].append(surp/len(row['actions']))
 
     # for cross entropy total, calculate the average and standard deviation for all "key"
     saverage = np.mean(score["xentropy"])
     sstd = np.std(score["xentropy"])
 
     # for normalized values, calculate the average and standard deviation for all "key"
-    naverage = np.mean(score["normalizeds"])
-    nstd = np.std(score["normalizeds"])
+    naverage = np.mean(score["normalized"])
+    nstd = np.std(score["normalized"])
 
     # caculate the cross entropy zscore and normalized zscore for each "key"
-    for i in range(len(score['keys'])):
+    for i in range(len(score['key'])):
         if sstd != 0:
             xz = (score["xentropy"][i] - saverage) / sstd
         else:
@@ -128,7 +128,7 @@ def score_keys(context, acs, now):
         score['xz'][i] = xz if xz else 0
 
         if nstd != 0:
-            nz = (score["normalizeds"][i] - naverage) / nstd
+            nz = (score["normalized"][i] - naverage) / nstd
         else:
             nz = 0
         score['nz'][i] = nz if nz else 0
@@ -149,7 +149,7 @@ def score_keys(context, acs, now):
     return score
 
 def rate_key(score, key):
-    idx = score['keys'].index(key)
+    idx = score['key'].index(key)
 
     # this is a pivot. score are stored as array. we transform the data in a dictionary
     result = {key: score[key][idx] for key in list(score.keys())}
