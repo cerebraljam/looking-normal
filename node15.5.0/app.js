@@ -122,26 +122,28 @@ const readCache = async function(next) {
 		// console.log('1. nb docs:', docs.length)
 
 		if (docs.length > 0) {
-			let idx = 0 //docs.length - 1
-			// console.log(docs[0].date, now)
+			let idx = docs.length - 1
 			if (docs[idx].date >= now) { // the cache is still valid
-				// console.log(docs[idx].cachename, now, docs[idx].date, docs[idx].date >= now)
 				next(docs[idx].data)
 			} else { // the cache is expired
+
 				// extend the life of the cache for 1 minutes, then return null to tell to update the cache.
 				// we cross our fingers that the cache update don't take more than a minute...
 				// meanwhile, other clients will continue to use the old version
 				let query = {"_id": docs[idx]._id}
-				let operation = {"$set": {"date": new Date(now.getTime() + (10 * 1000))}}
-				// console.log('pushing back expiration', now, operation)
+				let operation = {"$set": {"date": new Date(now.getTime() + (60 * 1000))}}
 
 				collection.updateOne(query, operation, function(err, result) {
 					assert.equal(err, null)
-					next(null)
+					if (next != undefined) {
+						next(null)
+					}
 				})
 			}
 		} else {
-			next(null)
+			if (next != undefined) {
+				next(null)
+			}
 		}
 	})
 }
@@ -151,24 +153,21 @@ const writeCache = function(data, runtime, next) {
 
 	let now = new Date()
 
-	collection.deleteMany({"cachename": DBNAME}, function(err, deleted) {
+	let expiration = new Date(now.getTime() + runtime + 1000)
+
+	let payload = {
+		"date": expiration,
+		"cachename": DBNAME,
+		"data": data
+	}
+
+	collection.insertOne(payload, function(err, result) {
 		assert.equal(err, null)
-		// console.log('deleted', deleted.deletedCount)
+		assert.equal(1, result.result.n)
+		assert.equal(1, result.ops.length)
 
-		let expiration = new Date(now.getTime() + runtime + 1000)
-
-		let payload = {
-			"date": expiration,
-			"cachename": DBNAME,
-			"data": data
-		}
-		// console.log('new expiration', payload.date)
-
-		collection.insertOne(payload, function(err, result) {
+		collection.deleteMany({"cachename": DBNAME, "date": {"$gt": expiration}}, function(err, deleted) {
 			assert.equal(err, null)
-			assert.equal(1, result.result.n)
-			assert.equal(1, result.ops.length)
-			// console.log('wrote payload', result.result.n, payload)
 			next()
 		})
 	})
@@ -266,8 +265,8 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 		next(score)
 	})
 
-    // after everything is completed and the answer is returned to the client
-    // we cleanup old entries in the database
+  // after everything is completed and the answer is returned to the client
+  // we cleanup old entries in the database
 	collection.deleteMany({"date": {"$lt": timeLimit}}, function(err, result) {
 		assert.equal(err, null)
 	})
@@ -390,6 +389,29 @@ app.get('/ratemykey', async function(req, res) {
 				// step 2
 				aggregateActions(collection, async function(aggregated) {
 					// step 3
+
+					// Cache update dance
+					// ---------------------
+					// Query the cache to get the oldest version (readCache)
+					// if there is nothing
+				  //   generate it with addSurprisal             |------------|
+					//                                              ^
+					// if there is one which expiration is less than current time
+					//   use it                                    |---a--------|
+					//                                               ^
+					// if the cache is expired                     |---a--------|
+					//                                                  ^
+					//   change the expiration to 10 seconds later |------a-----|
+					//                                                  ^
+					//   basically telling the other workers to wait since they use the oldest one
+					//   generate the new cache (addSurprisal)
+					//   set the expiration at now + refresh runtime + 1 second
+					//   add the index to the database (writeCache)|----b-a-----|
+					//                                                  ^
+					//   delete any older cache (writeCache)       |----b-------|
+					//                                                  ^
+					//   any other node start to use the new cache from there
+
 					readCache(async function(actionScore) {
 
 						let cached = true
@@ -400,11 +422,7 @@ app.get('/ratemykey', async function(req, res) {
 							actionScore = await addSurprisal(aggregated)
 							const runTime = new Date() - startDate
 
-							writeCache(actionScore, runTime, function() {
-								// console.log('runtime', runTime)
-							})
-						// } else {
-						// 	console.log('cached')
+							writeCache(actionScore, runTime)
 						}
 
 						// let actionScore = await addSurprisal(cached, aggregated)
