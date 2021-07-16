@@ -33,16 +33,16 @@ MongoClient.connect(MONGOURL, function(err, client) {
 	db = client.db(DBNAME)
 })
 
-// Design decision: why am I using an array of actions instead of counting 
+// Design decision: why am I using an array of actions instead of counting
 // listing only unique actions and keeping a counter in parallel?
 // A. Some sessions can go forever. Actions taken few days ago can be
-//    irrelevant to calculate how current actions are important. Keeping an 
+//    irrelevant to calculate how current actions are important. Keeping an
 //    array of all actions and cuting after 1000 allows the app to forget
 //    past actions, which is not possible to flush counts from a previous day,
 //    unless we keep distint counters per day.
 
 // Function: insert
-// Called by: update 
+// Called by: update
 // Used for: if the update function did not find the key specified, `insert` will create a
 //           new entry in the database
 // receives:
@@ -110,6 +110,71 @@ const aggregateActions = function(collection, next) {
 		})
 }
 
+
+
+const readCache = async function(next) {
+	const collection = db.collection("cache")
+	let now = new Date()
+
+	collection.find({"cachename": DBNAME}).sort({'date': 1}).toArray(function(err, docs) {
+
+		assert.equal(err, null)
+		// console.log('1. nb docs:', docs.length)
+
+		if (docs.length > 0) {
+			let idx = 0 //docs.length - 1
+			// console.log(docs[0].date, now)
+			if (docs[idx].date >= now) { // the cache is still valid
+				// console.log(docs[idx].cachename, now, docs[idx].date, docs[idx].date >= now)
+				next(docs[idx].data)
+			} else { // the cache is expired
+				// extend the life of the cache for 1 minutes, then return null to tell to update the cache.
+				// we cross our fingers that the cache update don't take more than a minute...
+				// meanwhile, other clients will continue to use the old version
+				let query = {"_id": docs[idx]._id}
+				let operation = {"$set": {"date": new Date(now.getTime() + (10 * 1000))}}
+				// console.log('pushing back expiration', now, operation)
+
+				collection.updateOne(query, operation, function(err, result) {
+					assert.equal(err, null)
+					next(null)
+				})
+			}
+		} else {
+			next(null)
+		}
+	})
+}
+
+const writeCache = function(data, runtime, next) {
+	const collection = db.collection("cache")
+
+	let now = new Date()
+
+	collection.deleteMany({"cachename": DBNAME}, function(err, deleted) {
+		assert.equal(err, null)
+		// console.log('deleted', deleted.deletedCount)
+
+		let expiration = new Date(now.getTime() + runtime + 1000)
+
+		let payload = {
+			"date": expiration,
+			"cachename": DBNAME,
+			"data": data
+		}
+		// console.log('new expiration', payload.date)
+
+		collection.insertOne(payload, function(err, result) {
+			assert.equal(err, null)
+			assert.equal(1, result.result.n)
+			assert.equal(1, result.ops.length)
+			// console.log('wrote payload', result.result.n, payload)
+			next()
+		})
+	})
+}
+
+
 // Function: addSurprisal
 // Called by: /ratemykey web endpoint as step 3
 // Used For: calculate and return a lookup table that will be used to
@@ -120,6 +185,7 @@ const aggregateActions = function(collection, next) {
 //   a lookup table containing the count and cross entropy value for each action
 const addSurprisal = async function(data) {
 	//console.log("step 3: addXEntropy")
+
 	let total = 0
 	let actionScore = {}
 
@@ -138,7 +204,7 @@ const addSurprisal = async function(data) {
 			'xentropy': Math.log2(1/(n/total))
 		}
 	}
-	
+
 	return actionScore
 }
 
@@ -156,18 +222,18 @@ const addSurprisal = async function(data) {
 const scoreKeys = async function(collection, actionScore, date, next) {
 	//console.log("step 4: score keys")
 
-    let timeLimit = new Date(date.getTime() - 86400000)
+  let timeLimit = new Date(date.getTime() - 86400000)
 
 	collection.find({"date": {"$gt": timeLimit}}).toArray(function(err, docs) {
 		assert.equal(err, null)
 
 		let score = {
-			"key": [], 
-			"xentropy": [], 
-			"normalized": [], 
-			"count": [], 
-			"xz": [], 
-			"nz": [], 
+			"key": [],
+			"xentropy": [],
+			"normalized": [],
+			"count": [],
+			"xz": [],
+			"nz": [],
 			"outlier": false
 		}
 
@@ -176,7 +242,7 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 			let surp = docs[row]['actions'].reduce(function(accumulator, currentValue) {
 				return accumulator + actionScore[currentValue]['xentropy']
 			},0)
-			
+
 			score['key'].push(key)
 			score['xentropy'].push(surp)
 			score['xz'].push(0)
@@ -196,7 +262,7 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 			score['xz'][i] = (score["xentropy"][i] - sAverage) / sStd || 0
 			score['nz'][i] = (score["normalized"][i] - nAverage) / nStd || 0
 		}
-		
+
 		next(score)
 	})
 
@@ -248,12 +314,12 @@ const rateKey = async function(score, key) {
 // Return: Nothing. Success/Failure transmitted to the caller through the callback
 const flushContext = async function(context, next) {
 	const collection = db.collection(context)
-	
+
 	await collection.deleteMany({}, function(err, result) {
 		if (err) {
 			console.error(err)
 			next(false)
-		} 
+		}
 		//console.log('result' + result)
 		next(true)
 	})
@@ -324,16 +390,33 @@ app.get('/ratemykey', async function(req, res) {
 				// step 2
 				aggregateActions(collection, async function(aggregated) {
 					// step 3
-					let actionScore = await addSurprisal(aggregated)
+					readCache(async function(actionScore) {
 
-					// step 4
-					scoreKeys(collection, actionScore, new Date(date), async function(score) {
-						// step 5
-						let rate = await rateKey(score, key)
-	
-						const runtime = (new Date() - startDate) / 1000
-						//console.log('sending response')
-						res.json({"context": context, "key": key, "action": action, "date": date, "runtime": runtime, "result": rate})
+						let cached = true
+
+						if (actionScore == null) {
+							cached = false
+							const startDate = new Date()
+							actionScore = await addSurprisal(aggregated)
+							const runTime = new Date() - startDate
+
+							writeCache(actionScore, runTime, function() {
+								// console.log('runtime', runTime)
+							})
+						// } else {
+						// 	console.log('cached')
+						}
+
+						// let actionScore = await addSurprisal(cached, aggregated)
+						// step 4
+						scoreKeys(collection, actionScore, new Date(date), async function(score) {
+							// step 5
+							let rate = await rateKey(score, key)
+
+							const runtime = (new Date() - startDate) / 1000
+							//console.log('sending response')
+							res.json({"context": context, "key": key, "action": action, "date": date, "cached": cached, "runtime": runtime, "result": rate})
+						})
 					})
 				})
 			} else {
