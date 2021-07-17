@@ -28,7 +28,7 @@ var didCheckIndexes = false
 
 // Initialization of the connection to the database
 MongoClient.connect(MONGOURL, function(err, client) {
-	assert.equal(null, err)
+	assert.strictEqual(null, err)
 	//console.log("Connected successfully to database")
 	db = client.db(DBNAME)
 })
@@ -54,9 +54,9 @@ MongoClient.connect(MONGOURL, function(err, client) {
 // Return: Nothing. Result transmitted through callback
 const insert = function(collection, key, action, now, next) {
 	collection.insertOne({"key": key, "actions": [], "date": now}, function(err, result) {
-		assert.equal(err, null)
-		assert.equal(1, result.result.n)
-		assert.equal(1, result.ops.length)
+		assert.strictEqual(err, null)
+		assert.strictEqual(1, result.result.n)
+		assert.strictEqual(1, result.ops.length)
 
 		//console.log("step 1: inserted " + key + " " + action)
 		next(result.result.n)
@@ -75,7 +75,7 @@ const insert = function(collection, key, action, now, next) {
 // Return: Nothing. Result transmitted through callback
 const update = function(collection, key, action, now, next) {
 	collection.updateOne({"key": key}, { $push: { "actions": { $each: [action], $slice: -1000 } }}, function(err, result) {
-		assert.equal(err, null)
+		assert.strictEqual(err, null)
 		if (result.result.n == 0) {
 			insert(collection, key, action, now, next)
 		} else {
@@ -102,7 +102,7 @@ const aggregateActions = function(collection, next) {
                 }
             }
         ], function(err, cursor) {
-			assert.equal(err, null)
+			assert.strictEqual(err, null)
 			cursor.toArray(function(err, documents) {
 				//console.log("step 2: aggregation")
 				next(documents)
@@ -112,13 +112,13 @@ const aggregateActions = function(collection, next) {
 
 
 
-const readCache = async function(next) {
+const readCache = async function(context, next) {
 	const collection = db.collection("cache")
 	let now = new Date()
 
-	collection.find({"cachename": DBNAME}).sort({'date': 1}).toArray(function(err, docs) {
+	collection.find({"cachename": context}).sort({'date': 1}).toArray(function(err, docs) {
 
-		assert.equal(err, null)
+		assert.strictEqual(err, null)
 		// console.log('1. nb docs:', docs.length)
 
 		if (docs.length > 0) {
@@ -134,7 +134,7 @@ const readCache = async function(next) {
 				let operation = {"$set": {"date": new Date(now.getTime() + (60 * 1000))}}
 
 				collection.updateOne(query, operation, function(err, result) {
-					assert.equal(err, null)
+					assert.strictEqual(err, null)
 					if (next != undefined) {
 						next(null)
 					}
@@ -148,7 +148,7 @@ const readCache = async function(next) {
 	})
 }
 
-const writeCache = function(data, runtime, next) {
+const writeCache = function(context, data, runtime, next) {
 	const collection = db.collection("cache")
 
 	let now = new Date()
@@ -157,18 +157,20 @@ const writeCache = function(data, runtime, next) {
 
 	let payload = {
 		"date": expiration,
-		"cachename": DBNAME,
+		"cachename": context,
 		"data": data
 	}
 
 	collection.insertOne(payload, function(err, result) {
-		assert.equal(err, null)
-		assert.equal(1, result.result.n)
-		assert.equal(1, result.ops.length)
+		assert.strictEqual(err, null)
+		assert.strictEqual(1, result.result.n)
+		assert.strictEqual(1, result.ops.length)
 
-		collection.deleteMany({"cachename": DBNAME, "date": {"$gt": expiration}}, function(err, deleted) {
-			assert.equal(err, null)
-			next()
+		collection.deleteMany({"cachename": context, "date": {"$gt": expiration}}, function(err, deleted) {
+			assert.strictEqual(err, null)
+			if (next != undefined) {
+				next()
+			}
 		})
 	})
 }
@@ -221,10 +223,10 @@ const addSurprisal = async function(data) {
 const scoreKeys = async function(collection, actionScore, date, next) {
 	//console.log("step 4: score keys")
 
-  let timeLimit = new Date(date.getTime() - 86400000)
+	let timeLimit = new Date(date.getTime() - 86400000)
 
 	collection.find({"date": {"$gt": timeLimit}}).toArray(function(err, docs) {
-		assert.equal(err, null)
+		assert.strictEqual(err, null)
 
 		let score = {
 			"key": [],
@@ -238,8 +240,15 @@ const scoreKeys = async function(collection, actionScore, date, next) {
 
 		for (let row in docs) {
 			let key = docs[row]['key']
+
 			let surp = docs[row]['actions'].reduce(function(accumulator, currentValue) {
-				return accumulator + actionScore[currentValue]['xentropy']
+				if (Object.keys(actionScore).indexOf(currentValue) != -1) {
+					return accumulator + actionScore[currentValue]['xentropy']
+				// } else { 
+				// 	let first_time = Math.log2(1/1/actionScore.length) | 1
+				// 	return accumulator + first_time
+				}
+				
 			},0)
 
 			score['key'].push(key)
@@ -268,7 +277,7 @@ const scoreKeys = async function(collection, actionScore, date, next) {
   // after everything is completed and the answer is returned to the client
   // we cleanup old entries in the database
 	collection.deleteMany({"date": {"$lt": timeLimit}}, function(err, result) {
-		assert.equal(err, null)
+		assert.strictEqual(err, null)
 	})
 }
 
@@ -324,6 +333,20 @@ const flushContext = async function(context, next) {
 	})
 }
 
+const flushCache = async function(context, next) {
+	const collection = db.collection("cache")
+
+	await collection.deleteMany({"cachename": context}, function(err, result) {
+		if (err) {
+			console.error(err)
+			next(false)
+		}
+		//console.log('result' + result)
+		next(true)
+	})
+}
+
+
 // Function: indexcollection
 // Called by: /ratebykey web endpoint at it's beginning
 // Used for: when the application is started, we don't know if the collection already exists
@@ -338,21 +361,27 @@ const indexCollection = async function(collection, key) {
 
 // App
 const app = express()
-app.use(bodyParser.urlencoded({ extended: false }))
-app.use(bodyParser.json())
+app.use(express.urlencoded({ extended: false }))
+app.use(express.json())
 
 // Default endpoint, returns nothing interesting
 app.get('/', (req, res) => {
-	res.send('Nothing to see here...')
+	res.json({"date": new Date().toISOString()})
 })
 
 // Used to reset all data for a specified context
 app.get('/reset', function(req, res) {
 	const context = req.query.context || "trash"
 	if (db != false && context != "trash") {
-		let result = flushContext(context, function(result) {
+		flushContext(context, function(result) {
 			if (result) {
-				res.send("Removed all documents from " + context)
+				flushCache(context, function(result) {
+					if (result) {
+						res.send("Removed all documents from " + context)
+					} else {
+						res.send('could not remove document from ' + context)		
+					}
+				})
 			} else {
 				res.send('could not remove document from ' + context)
 			}
@@ -371,6 +400,12 @@ app.get('/ratemykey', async function(req, res) {
 	const key = req.query.key || "trash"
 	const action = req.query.action || "trash"
 	const date = req.query.date || new Date().toISOString()
+	
+	if (!new Date(date)) {
+		console.error('date error', date, req.query.date)
+		res.json({"error": true, "reason": "your date is not good"})
+	} 
+
     var array = [context, key, action]
 
 	if (db != false && array.indexOf("trash") == -1) {
@@ -392,40 +427,40 @@ app.get('/ratemykey', async function(req, res) {
 
 					// Cache update dance
 					// ---------------------
-					// Query the cache to get the oldest version (readCache)
+					// Get the cache with the later expiration (readCache)
 					// if there is nothing
-				  //   generate it with addSurprisal             |------------|
-					//                                              ^
-					// if there is one which expiration is less than current time
-					//   use it                                    |---a--------|
-					//                                               ^
-					// if the cache is expired                     |---a--------|
+					//   generate it with addSurprisal                |------------|
+					//                                                 ^
+					// if there is one with an expiration less than current time
+					//   use it                                       |---a--------|
 					//                                                  ^
-					//   change the expiration to 10 seconds later |------a-----|
-					//                                                  ^
-					//   basically telling the other workers to wait since they use the oldest one
+					// if the cache is expired                        |---a--------|
+					//                                                     ^
+					//   push the expiration 10 seconds later         |------a-----|
+					//                                                     ^
+					//   basically telling the other workers that that expired cache is valid a bit longer.
 					//   generate the new cache (addSurprisal)
 					//   set the expiration at now + refresh runtime + 1 second
-					//   add the index to the database (writeCache)|----b-a-----|
-					//                                                  ^
-					//   delete any older cache (writeCache)       |----b-------|
-					//                                                  ^
-					//   any other node start to use the new cache from there
+					//   add the cache to the database (writeCache)   |----b-a-----|
+					//                                                     ^
+					//   delete any cache (writeCache) expiring after |----b-------|
+					//                                                     ^
+					//   any other node will start to use that cache
 
-					readCache(async function(actionScore) {
+					readCache(context, async function(actionScore) {
 
 						let cached = true
 
-						if (actionScore == null) {
+						if (actionScore == null || Object.keys(actionScore).indexOf(key) == -1) {
 							cached = false
-							const startDate = new Date()
+							const updateStartDate = new Date()
+							
 							actionScore = await addSurprisal(aggregated)
-							const runTime = new Date() - startDate
+							const runTime = new Date() - updateStartDate
 
-							writeCache(actionScore, runTime)
+							writeCache(context, actionScore, runTime)
 						}
 
-						// let actionScore = await addSurprisal(cached, aggregated)
 						// step 4
 						scoreKeys(collection, actionScore, new Date(date), async function(score) {
 							// step 5
@@ -435,7 +470,7 @@ app.get('/ratemykey', async function(req, res) {
 							//console.log('sending response')
 							res.json({"context": context, "key": key, "action": action, "date": date, "cached": cached, "runtime": runtime, "result": rate})
 						})
-					})
+					})					
 				})
 			} else {
 				console.error("document was not inserted or updated")
@@ -443,7 +478,7 @@ app.get('/ratemykey', async function(req, res) {
 			}
 		})
 	} else {
-		res.send('Hello World')
+		res.json({"date": new Date().toISOString()})
     }
 })
 

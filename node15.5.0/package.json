@@ -3,9 +3,9 @@
 	"version": "0.0.1",
 	"description": "'rate my key' anomaly detection app in nodejs",
 	"author": "cerebraljam@gmail.com",
-	"main": "code/app.js",
+	"main": "code/server.js",
 	"scripts": {
-		"start": "node app.js",
+		"start": "node server.js",
 		"start.dev": "nodemon"
 	},
 	"dependencies": {
