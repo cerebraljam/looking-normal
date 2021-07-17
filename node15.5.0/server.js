@@ -449,16 +449,14 @@ app.get('/ratemykey', async function(req, res) {
 
 					readCache(context, async function(actionScore) {
 
-						let cached = true
-
-						if (actionScore == null || Object.keys(actionScore).indexOf(key) == -1) {
-							cached = false
-							const updateStartDate = new Date()
+						let cached_runtime = 0
+						
+						if (actionScore == null || Object.keys(actionScore).indexOf(action) == -1) {
 							
 							actionScore = await addSurprisal(aggregated)
-							const runTime = new Date() - updateStartDate
+							cached_runtime = new Date() - startDate
 
-							writeCache(context, actionScore, runTime)
+							writeCache(context, actionScore, cached_runtime)
 						}
 
 						// step 4
@@ -468,7 +466,7 @@ app.get('/ratemykey', async function(req, res) {
 
 							const runtime = (new Date() - startDate) / 1000
 							//console.log('sending response')
-							res.json({"context": context, "key": key, "action": action, "date": date, "cached": cached, "runtime": runtime, "result": rate})
+							res.json({"context": context, "key": key, "action": action, "date": date, "cache_runtime": cached_runtime / 1000, "runtime": runtime, "result": rate})
 						})
 					})					
 				})
