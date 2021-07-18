@@ -10,10 +10,8 @@ keyfield = sys.argv[3] or "buyer_id"
 actionfield = sys.argv[4] or "paid_method"
 valuefield = sys.argv[5] or "price"
 
-def ceil_power_of_10(n):
-    exp = log(n, 10)
-    exp = ceil(exp)
-    return 10**exp
+def ceil_power_of_x(n, x):
+    return x**ceil(log(n, x))
 
 if context and datefield and keyfield and actionfield:
     for raw in sys.stdin:
@@ -25,7 +23,7 @@ if context and datefield and keyfield and actionfield:
             date = datetime.datetime.strptime(d, "%Y-%m-%d %H:%M:%S UTC").isoformat()
             key = line[keyfield]
             action = line[actionfield]
-            value = ceil_power_of_10(int(line[valuefield]))
+            value = ceil_power_of_x(int(line[valuefield]), 10)
             params = {
                     "context": context,
                     "key": key,

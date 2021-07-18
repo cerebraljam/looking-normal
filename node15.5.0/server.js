@@ -19,6 +19,10 @@ const NZLIMIT = Number(process.env.NZLIMIT) || 3
 
 var db = false
 var didCheckIndexes = false
+var memory_cache = {}
+
+const lookupCacheName = "lookupTable"
+const scoreKeysCacheName = "scoreKeys"
 
 // Design decision: Why did I use Mongodb and not sql?
 // A. both would have work. I used to use Bigquery to do the same thing. Mongodb
@@ -112,61 +116,73 @@ const aggregateActions = function(collection, next) {
 
 
 
-const readCache = async function(context, next) {
-	const collection = db.collection("cache")
+const readCache = async function(context, cacheName, next) {
+	let hit_cache = true
 	let now = new Date()
 
-	collection.find({"cachename": context}).sort({'date': 1}).toArray(function(err, docs) {
+	if (Object.keys(memory_cache).indexOf(context + cacheName) != -1 && false) {
+		if (memory_cache[context + cacheName].date >= now) {
+			hit_cache = false
+			next(memory_cache[context + cacheName].data)
+		} 
+	}
 
-		assert.strictEqual(err, null)
-		// console.log('1. nb docs:', docs.length)
+	if (hit_cache) {
+		const collection = db.collection(cacheName)
+		
+		collection.find({"context": context}).sort({'date': 1}).toArray(function(err, docs) {
+			assert.strictEqual(err, null)
+				
+			if (docs.length > 0) {
+				let idx = docs.length - 1
 
-		if (docs.length > 0) {
-			let idx = docs.length - 1
-			if (docs[idx].date >= now) { // the cache is still valid
-				next(docs[idx].data)
-			} else { // the cache is expired
-
-				// extend the life of the cache for 1 minutes, then return null to tell to update the cache.
-				// we cross our fingers that the cache update don't take more than a minute...
-				// meanwhile, other clients will continue to use the old version
-				let query = {"_id": docs[idx]._id}
-				let operation = {"$set": {"date": new Date(now.getTime() + (60 * 1000))}}
-
-				collection.updateOne(query, operation, function(err, result) {
-					assert.strictEqual(err, null)
-					if (next != undefined) {
-						next(null)
-					}
-				})
+				if (docs[idx].date >= now) { // the cache is still valid
+					next(docs[idx].data)
+				} else { // the cache is expired
+	
+					// extend the life of the cache for 5 seconds, then return null to tell to update the cache.
+					// we cross our fingers that the cache update don't take more than that...
+					// meanwhile, other clients will continue to use the old version
+					let query = {"_id": docs[idx]._id}
+					let operation = {"$set": {"date": new Date(now.getTime() + (5 * 1000))}}
+	
+					collection.updateOne(query, operation, function(err, result) {
+						assert.strictEqual(err, null)
+						if (next != undefined) {
+							next(null)
+						}
+					})
+				}
+			} else {
+				if (next != undefined) {
+					next(null)
+				}
 			}
-		} else {
-			if (next != undefined) {
-				next(null)
-			}
-		}
-	})
+		})
+	}	
 }
 
-const writeCache = function(context, data, runtime, next) {
-	const collection = db.collection("cache")
+const writeCache = function(context, cacheName, data, runtime, next) {
+	const collection = db.collection(cacheName)
 
 	let now = new Date()
 
-	let expiration = new Date(now.getTime() + runtime + 1000)
+	let expiration = new Date(now.getTime() + runtime + 2000)
 
 	let payload = {
 		"date": expiration,
-		"cachename": context,
+		"context": context,
 		"data": data
 	}
 
+	memory_cache[context + cacheName] = payload
+	
 	collection.insertOne(payload, function(err, result) {
 		assert.strictEqual(err, null)
 		assert.strictEqual(1, result.result.n)
 		assert.strictEqual(1, result.ops.length)
 
-		collection.deleteMany({"cachename": context, "date": {"$gt": expiration}}, function(err, deleted) {
+		collection.deleteMany({"context": context, "date": {"$gt": expiration}}, function(err, deleted) {
 			assert.strictEqual(err, null)
 			if (next != undefined) {
 				next()
@@ -209,6 +225,29 @@ const addSurprisal = async function(data) {
 	return actionScore
 }
 
+const handleRow = function(row, docs, actionScore) {
+	return docs[row]['actions'].reduce(function(accumulator, currentValue) {
+		if (Object.keys(actionScore).indexOf(currentValue) != -1) {
+			return accumulator + actionScore[currentValue]['xentropy']
+		}
+		
+	},0)
+
+}
+
+const removeCurrentKey = function(score, currentKey) {
+
+	let idx = Object.keys(score['key']).indexOf(currentKey)
+
+	if (idx != -1) {
+		score.forEach(element => {
+			score[element].splice(idx, 1)
+		})
+	}
+	return score
+
+}
+
 // Function: scoreKeys
 // Called by: /ratemykey web endpoint as step 4
 // Used For: Goes through each "key" in the database, lookup the information value
@@ -220,65 +259,91 @@ const addSurprisal = async function(data) {
 //    date: date and time of the event, provided by the client or current system date time
 //    next: callback function
 // Return: Nothing. Result transmitted through callback
-const scoreKeys = async function(collection, actionScore, date, next) {
+const scoreKeys = async function(collection, cachedScore, actionScore, currentKey, date, next) {
 	//console.log("step 4: score keys")
 
-	let timeLimit = new Date(date.getTime() - 86400000)
+	let timeLimit = new Date(date.getTime() - (86400000))
 
-	collection.find({"date": {"$gt": timeLimit}}).toArray(function(err, docs) {
-		assert.strictEqual(err, null)
+	if (cachedScore != null) {
+		let score = removeCurrentKey(cachedScore, currentKey)
 
+		collection.find({"date": {"$gt": timeLimit}, "key": currentKey}).toArray(function(err, docs) {
+			assert.strictEqual(err, null)
+
+			for (let row in docs) {
+				let key = docs[row]['key']
+	
+				let surp = handleRow(row, docs, actionScore)
+	
+				score['key'].push(key)
+				score['xentropy'].push(surp)
+				score['xz'].push(0)
+				score['nz'].push(0)
+				score['count'].push(docs[row]['actions'].length || 0)
+				score['normalized'].push(surp/docs[row]['actions'].length || 0)
+			}
+	
+			let sAverage = math.mean(score['xentropy']) || 0
+			let sStd = math.std(score['xentropy'], 'uncorrected')
+	
+			let nAverage = math.mean(score['normalized']) || 0
+			let nStd = math.std(score['normalized'], 'uncorrected')
+	
+			// calculate the cross entropy zscore and normalized zscore for the last key only
+			let lastIdx = score['key'].length - 1
+			score['xz'][lastIdx] = (score["xentropy"][lastIdx] - sAverage) / sStd || 0
+			score['nz'][lastIdx] = (score["normalized"][lastIdx] - nAverage) / nStd || 0
+			
+			next(score)	
+		})
+	} else {
+		console.log('* not using the score cache...')
 		let score = {
 			"key": [],
 			"xentropy": [],
 			"normalized": [],
 			"count": [],
 			"xz": [],
-			"nz": [],
-			"outlier": false
+			"nz": []
 		}
 
-		for (let row in docs) {
-			let key = docs[row]['key']
+		collection.find({"date": {"$gt": timeLimit}}).toArray(function(err, docs) {
+			assert.strictEqual(err, null)
+			
+			for (let row in docs) {
+				let key = docs[row]['key']
+	
+				let surp = handleRow(row, docs, actionScore)
+	
+				score['key'].push(key)
+				score['xentropy'].push(surp)
+				score['xz'].push(0)
+				score['nz'].push(0)
+				score['count'].push(docs[row]['actions'].length || 0)
+				score['normalized'].push(surp/docs[row]['actions'].length || 0)
+			}
+	
+			let sAverage = math.mean(score['xentropy']) || 0
+			let sStd = math.std(score['xentropy'], 'uncorrected')
+	
+			let nAverage = math.mean(score['normalized']) || 0
+			let nStd = math.std(score['normalized'], 'uncorrected')
+	
+			// calculate the cross entropy zscore and normalized zscore for each "key"
+			for (let i = 0; i < score['key'].length; i++) {
+				score['xz'][i] = (score["xentropy"][i] - sAverage) / sStd || 0
+				score['nz'][i] = (score["normalized"][i] - nAverage) / nStd || 0
+			}
+			// console.log('score', inspect(score))
+			next(score)	
+		})
 
-			let surp = docs[row]['actions'].reduce(function(accumulator, currentValue) {
-				if (Object.keys(actionScore).indexOf(currentValue) != -1) {
-					return accumulator + actionScore[currentValue]['xentropy']
-				// } else { 
-				// 	let first_time = Math.log2(1/1/actionScore.length) | 1
-				// 	return accumulator + first_time
-				}
-				
-			},0)
-
-			score['key'].push(key)
-			score['xentropy'].push(surp)
-			score['xz'].push(0)
-			score['nz'].push(0)
-			score['count'].push(docs[row]['actions'].length || 0)
-			score['normalized'].push(surp/docs[row]['actions'].length || 0)
-		}
-
-		let sAverage = math.mean(score['xentropy']) || 0
-		let sStd = math.std(score['xentropy'], 'uncorrected')
-
-		let nAverage = math.mean(score['normalized']) || 0
-		let nStd = math.std(score['normalized'], 'uncorrected')
-
-		// calculate the cross entropy zscore and normalized zscore for each "key"
-		for (let i = 0; i < score['key'].length; i++) {
-			score['xz'][i] = (score["xentropy"][i] - sAverage) / sStd || 0
-			score['nz'][i] = (score["normalized"][i] - nAverage) / nStd || 0
-		}
-
-		next(score)
-	})
-
-  // after everything is completed and the answer is returned to the client
-  // we cleanup old entries in the database
-	collection.deleteMany({"date": {"$lt": timeLimit}}, function(err, result) {
-		assert.strictEqual(err, null)
-	})
+		// after everything is completed and the answer is returned to the client
+		// we cleanup old entries in the database
+		await collection.deleteMany({"date": {"$lt": timeLimit}}, function(err, result) {
+			assert.strictEqual(err, null)
+		})
+	}
 }
 
 // Function: rateKey
@@ -333,10 +398,10 @@ const flushContext = async function(context, next) {
 	})
 }
 
-const flushCache = async function(context, next) {
-	const collection = db.collection("cache")
+const flushCache = async function(context, cacheName, next) {
+	const collection = db.collection(cacheName)
 
-	await collection.deleteMany({"cachename": context}, function(err, result) {
+	await collection.deleteMany({"context": context}, function(err, result) {
 		if (err) {
 			console.error(err)
 			next(false)
@@ -373,17 +438,26 @@ app.get('/', (req, res) => {
 app.get('/reset', function(req, res) {
 	const context = req.query.context || "trash"
 	if (db != false && context != "trash") {
+		console.log('* flushing', context)
 		flushContext(context, function(result) {
 			if (result) {
-				flushCache(context, function(result) {
+				console.log('* flushing', lookupCacheName)
+				flushCache(context, lookupCacheName, function(result) {
 					if (result) {
-						res.send("Removed all documents from " + context)
+						console.log('* flushing', scoreKeysCacheName)
+						flushCache(context, scoreKeysCacheName, function(result) {
+							if (result) {
+								res.send("Removed all documents and caches from " + context)
+							} else {
+								res.send('could not remove cache from ' + context)
+							}
+						})
 					} else {
-						res.send('could not remove document from ' + context)		
+						res.send('could not remove cache from ' + context)		
 					}
 				})
 			} else {
-				res.send('could not remove document from ' + context)
+				res.send('could not remove cache from ' + context)
 			}
 		})
 
@@ -446,28 +520,49 @@ app.get('/ratemykey', async function(req, res) {
 					//   delete any cache (writeCache) expiring after |----b-------|
 					//                                                     ^
 					//   any other node will start to use that cache
-
-					readCache(context, async function(actionScore) {
-
-						let cached_runtime = 0
+					
+					let cache1ReadRuntime = 0
+					readCache(context, lookupCacheName, async function(actionScore) {					
 						
 						if (actionScore == null || Object.keys(actionScore).indexOf(action) == -1) {
+							let cacheRunStart = new Date()
 							
 							actionScore = await addSurprisal(aggregated)
-							cached_runtime = new Date() - startDate
+							cache1ReadRuntime = new Date() - cacheRunStart
+							let completeRuntime = new Date() - startDate
 
-							writeCache(context, actionScore, cached_runtime)
+							writeCache(context, lookupCacheName, actionScore, cache1ReadRuntime + completeRuntime)
 						}
 
 						// step 4
-						scoreKeys(collection, actionScore, new Date(date), async function(score) {
-							// step 5
-							let rate = await rateKey(score, key)
+						let cache2ReadRuntime = 0
+						// console.log('* reading', scoreKeysCacheName)
+						readCache(context, scoreKeysCacheName, async function(score) {
+							let forceUpdate = false
+							let cacheRunStart = new Date()
 
-							const runtime = (new Date() - startDate) / 1000
-							//console.log('sending response')
-							res.json({"context": context, "key": key, "action": action, "date": date, "cache_runtime": cached_runtime / 1000, "runtime": runtime, "result": rate})
+							if (score == null || score['key'] == undefined) {
+								forceUpdate = true
+								score=null
+							} 							
+
+							scoreKeys(collection, score, actionScore, key, new Date(date), async function(score) {							
+								if (forceUpdate) {
+									// console.log('* new compiled scores:', inspect(score))
+									cache2ReadRuntime = new Date() - cacheRunStart
+									writeCache(context, scoreKeysCacheName, score, cache2ReadRuntime)
+								}
+
+								// step 5
+								let rate = await rateKey(score, key)
+		
+								const runtime = (new Date() - startDate) / 1000
+								// console.log('sending response', runtime)
+								res.json({"context": context, "key": key, "action": action, "date": date, "cache_runtime": (cache1ReadRuntime + cache2ReadRuntime) / 1000, "runtime": runtime, "result": rate})
+							})
+
 						})
+						
 					})					
 				})
 			} else {
