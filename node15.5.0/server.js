@@ -289,8 +289,8 @@ const scoreKeys = async function(collection, cachedScore, actionScore, currentKe
 			let nAverage = math.mean(score['normalized']) || 0
 			let nStd = math.std(score['normalized'], 'uncorrected')
 	
-			// calculate the cross entropy zscore and normalized zscore for the last key only
-			let lastIdx = score['key'].length - 1
+			// calculate the cross entropy zscore and normalized zscore for the currentKey only
+			let lastIdx = Object.keys(score['key']).indexOf(currentKey)
 			score['xz'][lastIdx] = (score["xentropy"][lastIdx] - sAverage) / sStd || 0
 			score['nz'][lastIdx] = (score["normalized"][lastIdx] - nAverage) / nStd || 0
 			
