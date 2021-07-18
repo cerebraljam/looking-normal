@@ -297,7 +297,6 @@ const scoreKeys = async function(collection, cachedScore, actionScore, currentKe
 			next(score)	
 		})
 	} else {
-		console.log('* not using the score cache...')
 		let score = {
 			"key": [],
 			"xentropy": [],
