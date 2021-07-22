@@ -120,7 +120,7 @@ const readCache = async function(context, cacheName, next) {
 	let hit_cache = true
 	let now = new Date()
 
-	if (Object.keys(memory_cache).indexOf(context + cacheName) != -1 && false) {
+	if (Object.keys(memory_cache).indexOf(context + cacheName) != -1) {
 		if (memory_cache[context + cacheName].date >= now) {
 			hit_cache = false
 			next(memory_cache[context + cacheName].data)
@@ -167,7 +167,7 @@ const writeCache = function(context, cacheName, data, runtime, next) {
 
 	let now = new Date()
 
-	let expiration = new Date(now.getTime() + runtime + 2000)
+	let expiration = new Date(now.getTime() + runtime + 3000)
 
 	let payload = {
 		"date": expiration,
@@ -306,9 +306,9 @@ const scoreKeys = async function(collection, cachedScore, actionScore, currentKe
 			"nz": []
 		}
 
-		collection.find({"date": {"$gt": timeLimit}}).toArray(function(err, docs) {
+		collection.aggregate([{"$match": {"date": {"$gt": timeLimit}}}, {"$sample": { "size": 5000}}]).toArray(function(err, docs) {
 			assert.strictEqual(err, null)
-			
+					
 			for (let row in docs) {
 				let key = docs[row]['key']
 	
