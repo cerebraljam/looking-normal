@@ -95,3 +95,16 @@ This query will wipe all data in the database for a specified context.
 ```
 curl http://localhost:5000/reset?context=okta_by_ip
 ```
+
+# Differences between the Python Version and the Nodejs version
+
+Python
+- no cache, the app is going through a full refresh of the state at each query
+- there might be an issue in the code, or how garbage collection is handled, but this python app seems to have a memory leak. 
+
+Nodejs
++ Caching the score lookup table both in mongodb for all workers, and in memory for the local instance
++ Caching the entries from the database used by the scorekey function, both in mongodb for all workers and in memory for the local instance
++ The statistics for keys are calculated on a sample size of 5000. This limit is aribrary, but since statistics considers a sample to be sufficient over 1050, this gives some margin to have a reliable accuracy
+
+The nodejs version was tested against a log file with 1.8M distinct keys and over 3.8M transactions. Running locally with the current cache tuning, I managed to process ~170k events per hour, which is not super fast (~47 events per second). While this is sufficient to handle the ~44 events per second from the log file, using horizontal scaling is likely going to be necessary to process more events.

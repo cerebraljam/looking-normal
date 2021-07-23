@@ -23,6 +23,7 @@ var memory_cache = {}
 
 const lookupCacheName = "lookupTable"
 const scoreKeysCacheName = "scoreKeys"
+const keySampleSize = 5000
 
 // Design decision: Why did I use Mongodb and not sql?
 // A. both would have work. I used to use Bigquery to do the same thing. Mongodb
@@ -306,35 +307,49 @@ const scoreKeys = async function(collection, cachedScore, actionScore, currentKe
 			"nz": []
 		}
 
-		collection.aggregate([{"$match": {"date": {"$gt": timeLimit}}}, {"$sample": { "size": 5000}}]).toArray(function(err, docs) {
+		collection.aggregate([{"$match": {"date": {"$gt": timeLimit}}}, {"$sample": { "size": keySampleSize}}]).toArray(function(err, docs) {
 			assert.strictEqual(err, null)
-					
-			for (let row in docs) {
-				let key = docs[row]['key']
-	
-				let surp = handleRow(row, docs, actionScore)
-	
-				score['key'].push(key)
-				score['xentropy'].push(surp)
-				score['xz'].push(0)
-				score['nz'].push(0)
-				score['count'].push(docs[row]['actions'].length || 0)
-				score['normalized'].push(surp/docs[row]['actions'].length || 0)
-			}
-	
-			let sAverage = math.mean(score['xentropy']) || 0
-			let sStd = math.std(score['xentropy'], 'uncorrected')
-	
-			let nAverage = math.mean(score['normalized']) || 0
-			let nStd = math.std(score['normalized'], 'uncorrected')
-	
-			// calculate the cross entropy zscore and normalized zscore for each "key"
-			for (let i = 0; i < score['key'].length; i++) {
-				score['xz'][i] = (score["xentropy"][i] - sAverage) / sStd || 0
-				score['nz'][i] = (score["normalized"][i] - nAverage) / nStd || 0
-			}
-			// console.log('score', inspect(score))
-			next(score)	
+
+			// the sample might not include the current key, therefore we need to ask it
+			collection.find({"date": {"$gt": timeLimit}, "key": currentKey}).toArray(function(err, currentKeyDocs) {
+				assert.strictEqual(err, null)
+			
+				let currentKeyFound = false 
+						
+				for (let row in docs) {
+					let key = docs[row]['key']
+					if (currentKey == key) {
+						currentKeyFound = true
+					}
+					if (row == docs.length -1 && !currentKeyFound) { // this is the last row and we still haven't seen the currentKey
+						docs.push(currentKeyDocs.shift())
+						console.log('currentKey was missing... adding', currentKeyDocs.length, docs.length)
+					}
+		
+					let surp = handleRow(row, docs, actionScore)
+		
+					score['key'].push(key)
+					score['xentropy'].push(surp)
+					score['xz'].push(0)
+					score['nz'].push(0)
+					score['count'].push(docs[row]['actions'].length || 0)
+					score['normalized'].push(surp/docs[row]['actions'].length || 0)
+				}
+		
+				let sAverage = math.mean(score['xentropy']) || 0
+				let sStd = math.std(score['xentropy'], 'uncorrected')
+		
+				let nAverage = math.mean(score['normalized']) || 0
+				let nStd = math.std(score['normalized'], 'uncorrected')
+		
+				// calculate the cross entropy zscore and normalized zscore for each "key"
+				for (let i = 0; i < score['key'].length; i++) {
+					score['xz'][i] = (score["xentropy"][i] - sAverage) / sStd || 0
+					score['nz'][i] = (score["normalized"][i] - nAverage) / nStd || 0
+				}
+				// console.log('score', inspect(score))
+				next(score)	
+			})
 		})
 
 		// after everything is completed and the answer is returned to the client
