@@ -32,11 +32,14 @@ const keySampleSize = 5000
 //    in a full memory based database (ex.: redis) if mongodb can't handle the load
 
 // Initialization of the connection to the database
+
 MongoClient.connect(MONGOURL, function(err, client) {
 	assert.strictEqual(null, err)
 	//console.log("Connected successfully to database")
 	db = client.db(DBNAME)
-})
+})	
+
+
 
 // Design decision: why am I using an array of actions instead of counting
 // listing only unique actions and keeping a counter in parallel?
@@ -97,24 +100,38 @@ const update = function(collection, key, action, now, next) {
 //    collection: a collection object previously initialized
 //    next: callback function
 // Return: Nothing. Result transmitted through callback
-const aggregateActions = function(collection, next) {
+const aggregateActions = function(collection, date, next) {
 	collection.aggregate([
-    	{ "$unwind": "$actions" },
+		// { "$match": {"date": {"$gt": new Date(date.getTime() - (1800000))}} },
+		{ "$sample": { "size": 10000 }},
+		{ "$unwind": "$actions" },
         {
             "$group": {
                 "_id": "$actions",
                 "count": { "$sum": 1 }
                 }
             }
-        ], function(err, cursor) {
+        ]).toArray(function(err, documents) {
 			assert.strictEqual(err, null)
-			cursor.toArray(function(err, documents) {
-				//console.log("step 2: aggregation")
-				next(documents)
-			})
+
+			// console.log("step 2: aggregation", documents.length)
+			next(documents)
 		})
 }
 
+const checkAggregatedcCompleteness = function(aggregated, action) {
+	let actionFound = false
+	for (let i in aggregated) {
+		if (aggregated[i]['_id'] == action){
+			actionFound = true
+		}
+		break
+	}
+	if (!actionFound) {
+		aggregated.push({'_id': action, 'count': 1})
+	}
+	return aggregated
+}
 
 
 const readCache = async function(context, cacheName, next) {
@@ -222,18 +239,25 @@ const addSurprisal = async function(data) {
 			'xentropy': Math.log2(1/(n/total))
 		}
 	}
+	actionScore['unknownAction'] = {
+		'count': 1,
+		'xentropy': Math.log2(1/(1/total))
+	}
 
 	return actionScore
 }
 
 const handleRow = function(row, docs, actionScore) {
+
 	return docs[row]['actions'].reduce(function(accumulator, currentValue) {
 		if (Object.keys(actionScore).indexOf(currentValue) != -1) {
 			return accumulator + actionScore[currentValue]['xentropy']
+		} else {
+
+			return accumulator + actionScore['unknownAction']['xentropy']
 		}
 		
 	},0)
-
 }
 
 const removeCurrentKey = function(score, currentKey) {
@@ -333,6 +357,12 @@ const scoreKeys = async function(collection, cachedScore, actionScore, currentKe
 					score['nz'].push(0)
 					score['count'].push(docs[row]['actions'].length || 0)
 					score['normalized'].push(surp/docs[row]['actions'].length || 0)
+				}
+
+				for (let i in score['xentropy']) {
+					if (!Number.isFinite(score['xentropy'][i])) {
+						console.log(i, score['xentropy'][i])
+					}
 				}
 		
 				let sAverage = math.mean(score['xentropy']) || 0
@@ -509,9 +539,9 @@ app.get('/ratemykey', async function(req, res) {
 		update(collection, key, action, new Date(date), function(n) {
 			if (n) {
 				// step 2
-				aggregateActions(collection, async function(aggregated) {
+				aggregateActions(collection, new Date(date), async function(aggregated) {
+					aggregated = checkAggregatedcCompleteness(aggregated, action)
 					// step 3
-
 					// Cache update dance
 					// ---------------------
 					// Get the cache with the later expiration (readCache)
