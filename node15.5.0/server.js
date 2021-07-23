@@ -323,7 +323,6 @@ const scoreKeys = async function(collection, cachedScore, actionScore, currentKe
 					}
 					if (row == docs.length -1 && !currentKeyFound) { // this is the last row and we still haven't seen the currentKey
 						docs.push(currentKeyDocs.shift())
-						console.log('currentKey was missing... adding', currentKeyDocs.length, docs.length)
 					}
 		
 					let surp = handleRow(row, docs, actionScore)
