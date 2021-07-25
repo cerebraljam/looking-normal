@@ -14,8 +14,9 @@ const PORT = process.env.PORT || 5000
 const HOST = process.env.HOST || "0.0.0.0"
 const MONGOURL = "mongodb://mongo:27017/"
 const DBNAME = "ratemykey"
-const SZLIMIT = Number(process.env.SZLIMIT) || 3
-const NZLIMIT = Number(process.env.NZLIMIT) || 3
+const SZLIMIT = Number(process.env.SZLIMIT) || 4
+const NZLIMIT = Number(process.env.NZLIMIT) || 4
+const KEYSAMPLESIZE = Number(process.env.KEYSAMPLESIZE) || 2000
 
 var db = false
 var didCheckIndexes = false
@@ -23,7 +24,7 @@ var memory_cache = {}
 
 const lookupCacheName = "lookupTable"
 const scoreKeysCacheName = "scoreKeys"
-const keySampleSize = 5000
+
 
 // Design decision: Why did I use Mongodb and not sql?
 // A. both would have work. I used to use Bigquery to do the same thing. Mongodb
@@ -103,7 +104,7 @@ const update = function(collection, key, action, now, next) {
 const aggregateActions = function(collection, date, next) {
 	collection.aggregate([
 		// { "$match": {"date": {"$gt": new Date(date.getTime() - (1800000))}} },
-		{ "$sample": { "size": 10000 }},
+		{ "$sample": { "size": KEYSAMPLESIZE }},
 		{ "$unwind": "$actions" },
         {
             "$group": {
@@ -185,7 +186,7 @@ const writeCache = function(context, cacheName, data, runtime, next) {
 
 	let now = new Date()
 
-	let expiration = new Date(now.getTime() + runtime + 3000)
+	let expiration = new Date(now.getTime() + runtime + KEYSAMPLESIZE) // 3000
 
 	let payload = {
 		"date": expiration,
@@ -331,7 +332,7 @@ const scoreKeys = async function(collection, cachedScore, actionScore, currentKe
 			"nz": []
 		}
 
-		collection.aggregate([{"$match": {"date": {"$gt": timeLimit}}}, {"$sample": { "size": keySampleSize}}]).toArray(function(err, docs) {
+		collection.aggregate([{"$sample": { "size": KEYSAMPLESIZE}}]).toArray(function(err, docs) {
 			assert.strictEqual(err, null)
 
 			// the sample might not include the current key, therefore we need to ask it
@@ -531,8 +532,8 @@ app.get('/ratemykey', async function(req, res) {
 
 		if (!didCheckIndexes) {
 			didCheckIndexes = true
-			await indexCollection(collection, "key")
-			await indexCollection(collection, "date")
+			// await indexCollection(collection, "key")
+			// await indexCollection(collection, "date")
 		}
 
 		// step 1
