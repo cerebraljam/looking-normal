@@ -15,8 +15,8 @@ const HOST = process.env.HOST || "0.0.0.0"
 const MONGOURL = "mongodb://mongo:27017/"
 const DBNAME = "ratemykey"
 const SZLIMIT = Number(process.env.SZLIMIT) || 4
-const NZLIMIT = Number(process.env.NZLIMIT) || 4
-const KEYSAMPLESIZE = Number(process.env.KEYSAMPLESIZE) || 2000
+const NZLIMIT = Number(process.env.NZLIMIT) || 3
+const KEYSAMPLESIZE = Number(process.env.KEYSAMPLESIZE) || 5000
 
 var db = false
 var didCheckIndexes = false
@@ -103,7 +103,6 @@ const update = function(collection, key, action, now, next) {
 // Return: Nothing. Result transmitted through callback
 const aggregateActions = function(collection, date, next) {
 	collection.aggregate([
-		// { "$match": {"date": {"$gt": new Date(date.getTime() - (1800000))}} },
 		{ "$sample": { "size": KEYSAMPLESIZE }},
 		{ "$unwind": "$actions" },
         {
