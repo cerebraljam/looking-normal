@@ -16,7 +16,7 @@ const MONGOURL = "mongodb://mongo:27017/"
 const DBNAME = "ratemykey"
 const SZLIMIT = Number(process.env.SZLIMIT) || 4
 const NZLIMIT = Number(process.env.NZLIMIT) || 3
-const KEYSAMPLESIZE = Number(process.env.KEYSAMPLESIZE) || 5000
+const KEYSAMPLESIZE = Number(process.env.KEYSAMPLESIZE) || 3000
 
 var db = false
 var didCheckIndexes = false
