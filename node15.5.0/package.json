@@ -2,7 +2,7 @@
 	"name": "ratemykey_node",
 	"version": "0.0.1",
 	"description": "'rate my key' anomaly detection app in nodejs",
-	"author": "cerebraljam@gmail.com",
+	"author": "github.com/cerebraljam",
 	"main": "code/server.js",
 	"scripts": {
 		"start": "node server.js",
